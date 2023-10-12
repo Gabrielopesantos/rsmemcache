@@ -1,4 +1,3 @@
-use std::fmt::format;
 use std::io::{self, BufRead, Write};
 use std::net::{AddrParseError, SocketAddr, TcpStream};
 use std::str::FromStr;
@@ -14,6 +13,7 @@ pub struct Client {
     timeout: u32,
 }
 
+#[derive(Debug)]
 pub enum ClientConnError {
     AddrParseError(AddrParseError),
     TcpConnectError(io::Error),
@@ -60,7 +60,7 @@ struct Conn {
 
 impl Conn {
     fn new(stream: TcpStream) -> Self {
-        // FIXME: try_clone
+        // FIXME: try_clone / expect
         Self {
             stream: stream.try_clone().expect("Clone failed!"), // NOTE: Needed?
             reader: io::BufReader::new(stream.try_clone().expect("Clone failed!")),
@@ -71,6 +71,9 @@ impl Conn {
     fn write_read_line(&mut self, write_buf: &[u8]) -> Result<Vec<u8>, &'static str> {
         if let Err(_) = self.writer.write_all(write_buf) {
             return Err("Could not write buffer to stream");
+        }
+        if let Err(_) = self.writer.flush() {
+            return Err("Could not send version command to server");
         }
 
         let mut read_buf: Vec<u8> = Vec::new();
@@ -86,6 +89,7 @@ impl Conn {
 #[cfg(test)]
 mod tests {
     use super::Client;
+    const LOCALHOST_TCP_ADDR: &str = "127.0.0.1:11211";
 
     #[test]
     fn invalid_server_addr_returns_err() {
@@ -94,5 +98,17 @@ mod tests {
             Ok(_) => panic!("Expected creation of new client to fail"),
             Err(_) => (),
         };
+    }
+
+    #[test]
+    fn test_local_host() {
+        let mut client = match Client::new(LOCALHOST_TCP_ADDR.to_string()) {
+            Ok(client) => client,
+            Err(error) => panic!("Could not connect to local server: {:?}", error),
+        };
+
+        if let Err(_) = client.ping() {
+            panic!("Expected ping to succeed")
+        }
     }
 }
