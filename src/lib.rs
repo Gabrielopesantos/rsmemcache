@@ -82,19 +82,22 @@ impl Client {
         if !legal_key(&item.key) {
             return Err("Invalid item key");
         }
+        // NOTE: Include all in one write?
         if let Err(_) = conn.writer.write_fmt(format_args!(
-            "{} {} {} {} {} {}\r\n",
+            "{} {} {} {} {}\r\n",
             verb,
             item.key,
             item.flags,
             item.expiration,
             item.value.len(),
-            item.cas_id
         )) {
             return Err("Could write set item command");
         }
         if let Err(_) = conn.writer.write_all(&item.value) {
             return Err("Could write item");
+        }
+        if let Err(_) = conn.writer.write_all(b"\r\n") {
+            return Err("Could write limiter");
         }
         if let Err(_) = conn.writer.flush() {
             return Err("Could not send item to server");
@@ -198,7 +201,8 @@ mod tests {
             panic!("Expected ping to succeed")
         }
 
-        let item = Item::new(String::from("color"), Vec::from("red"), 0, 3600);
+        // NOTE: Expiration 1 so tests don't fail on subsequent runs;
+        let item = Item::new(String::from("color"), Vec::from("red"), 0, 1);
         if let Err(_) = client.add(item) {
             panic!("Expected item to be successfully persisted")
         }
