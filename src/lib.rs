@@ -8,6 +8,35 @@ use std::str::FromStr;
 const DEFAULT_NET_TIMEOUT: u32 = 500;
 const DEFAULT_MAX_IDLE_CONNS: u8 = 2;
 
+const CR_LF: &[u8] = b"\r\n";
+const RESULT_OK: &[u8] = b"OK\r\n";
+const RESULT_STORED: &[u8] = b"STORED\r\n";
+const RESULT_NOT_STORED: &[u8] = b"NOT_STORED\r\n";
+const RESULT_EXISTS: &[u8] = b"EXISTS\r\n";
+const RESULT_NOT_FOUND: &[u8] = b"NOT_FOUND\r\n";
+const RESULT_DELETED: &[u8] = b"DELETED\r\n";
+const RESULT_END: &[u8] = b"END\r\n";
+const RESULT_TOUCHED: &[u8] = b"TOUCHED\r\n";
+
+const VERB_SET: &[u8] = b"set";
+const VERB_ADD: &[u8] = b"add";
+const VERB_REPLACE: &[u8] = b"replace";
+const VERB_APPEND: &[u8] = b"append";
+const VERB_PREPEND: &[u8] = b"prepend";
+const VERB_CAS: &[u8] = b"cas";
+const VERB_GET: &str = "get";
+const VERB_GETS: &[u8] = b"gets";
+const VERB_DELETE: &[u8] = b"delete";
+const VERB_INCR: &[u8] = b"incr";
+const VERB_DECR: &[u8] = b"decr";
+const VERB_TOUCH: &[u8] = b"touch";
+const VERB_GAT: &[u8] = b"gat";
+const VERB_GATS: &[u8] = b"gats";
+const VERB_STATS: &[u8] = b"stats";
+const VERB_FLUSH_ALL: &[u8] = b"flush_all";
+const VERB_VERSION: &[u8] = b"version";
+const VERB_QUIT: &[u8] = b"quit";
+
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Client {
@@ -69,6 +98,69 @@ impl Client {
         }
     }
 
+    // Abstraction `with_key_addr` missing as we only support a single server for now;
+    pub fn get(&mut self, key: String) -> Result<Item, &'static str> {
+        if !legal_key(&key) {
+            return Err("Invalid item key");
+        }
+        let conn = &mut self.conns[0];
+        conn.writer
+            .write_fmt(format_args!("{} {}\r\n", VERB_GET, key))
+            .map_err(|_| "Could not write get command")?;
+        conn.writer
+            .flush()
+            .map_err(|_| "Could not send get command to server")?;
+
+        // Parse get response
+        let mut read_buf: Vec<u8> = Vec::new();
+        conn.reader
+            .read_until(b'\n', &mut read_buf)
+            .map_err(|_| "Could not read server response")?;
+        if read_buf.as_slice() == RESULT_END {
+            // Different behavior from gomemcache
+            return Err("Item not found");
+        }
+        // Scan get response line
+        if read_buf.ends_with(CR_LF) {
+            read_buf.pop();
+            read_buf.pop();
+        }
+        let mut split = read_buf.split(|&x| x == b' ');
+        let _ = split.next(); // NOTE: Ignore first token
+        let key = String::from_utf8(split.next().unwrap().to_vec())
+            .map_err(|_| "Could not parse key: {}")?;
+        let flags = String::from_utf8(split.next().unwrap().to_vec())
+            .map_err(|_| "Could not parse flags")?;
+        let flags = match flags.parse::<u32>() {
+            Ok(flags) => flags,
+            Err(_) => return Err("Could not parse flags"),
+        };
+
+        let size = String::from_utf8(split.next().unwrap().to_vec())
+            .map_err(|_| "Could not parse size")?;
+
+        let size = match size.parse::<u32>() {
+            Ok(size) => size,
+            Err(_) => return Err("Could not parse the item value size"),
+        };
+
+        let mut value_buf: Vec<u8> = Vec::new();
+        conn.reader
+            .read_until(b'\n', &mut value_buf)
+            .map_err(|_| "Could not read value")?;
+        if value_buf.ends_with(CR_LF) {
+            value_buf.pop();
+            value_buf.pop();
+        }
+
+        // NOTE: Unwrap
+        if size != value_buf.len().try_into().unwrap() {
+            return Err("Size does not match value length");
+        }
+
+        return Ok(Item::new(key, value_buf, flags, 0));
+    }
+
     // TODO: Error
     // NOTE: Item reference?
     pub fn add(&mut self, item: Item) -> Result<(), &'static str> {
@@ -106,13 +198,13 @@ impl Client {
         if let Err(_) = conn.reader.read_until(b'\n', &mut read_buf) {
             return Err("Could not read server message");
         }
-        if let Ok(line) = String::from_utf8(read_buf.clone()) {
-            match line.trim() {
-                "STORED" => Ok(()),
-                _ => Err("TODO"),
-            }
-        } else {
-            Err("Could not parse the returned message")
+        // Errors
+        match read_buf.as_slice() {
+            RESULT_STORED => Ok(()),
+            RESULT_NOT_STORED => Err("Item not stored"),
+            RESULT_EXISTS => Err("Item already exists"),
+            RESULT_NOT_FOUND => Err("Item not found"),
+            _ => Err("Unknown error"),
         }
     }
 
@@ -150,10 +242,10 @@ impl Conn {
 
     fn write_read_line(&mut self, write_buf: &[u8]) -> Result<Vec<u8>, &'static str> {
         if let Err(_) = self.writer.write_all(write_buf) {
-            return Err("Could not write buffer to stream");
+            return Err("Could not write to buffer");
         }
         if let Err(_) = self.writer.flush() {
-            return Err("Could not send version command to server");
+            return Err("Could not send buffer to server");
         }
 
         let mut read_buf: Vec<u8> = Vec::new();
@@ -162,7 +254,7 @@ impl Conn {
                 print!("Successfully read {} bytes", bytes_read);
                 Ok(read_buf)
             }
-            Err(_) => return Err("Could not read from stream"),
+            Err(_) => return Err("Could not read from server"),
         }
     }
 }
@@ -201,10 +293,26 @@ mod tests {
             panic!("Expected ping to succeed")
         }
 
-        // NOTE: Expiration 1 so tests don't fail on subsequent runs;
-        let item = Item::new(String::from("color"), Vec::from("red"), 0, 1);
+        // NOTE: Expiration 5 so tests don't fail on subsequent runs;
+        let item_key = String::from("color");
+        let item_value = Vec::from("red");
+        let item_flags = 32;
+        let item = Item::new(item_key.clone(), item_value.clone(), item_flags, 5);
         if let Err(_) = client.add(item) {
             panic!("Expected item to be successfully persisted")
+        }
+
+        // Clone?
+        let item = match client.get(item_key.clone()) {
+            Ok(item) => item,
+            Err(error) => panic!("Expected item to be successfully retrieved: {}", error),
+        };
+
+        if item.value != item_value {
+            panic!("Expected value to be red")
+        }
+        if item.flags != item_flags {
+            panic!("Expected flags to be 0")
         }
     }
 }
