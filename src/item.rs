@@ -1,7 +1,7 @@
 #[derive(Debug)]
 pub struct Item {
     pub key: String,
-    pub  value: Vec<u8>,
+    pub value: Vec<u8>,
     pub flags: u32,
     pub expiration: i32,
     pub cas_id: u64,
@@ -14,7 +14,7 @@ impl Item {
             value,
             flags,
             expiration,
-            cas_id: 0,  //  NOTE: Add
+            cas_id: 0, //  NOTE: Add
         }
     }
 }

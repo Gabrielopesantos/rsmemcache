@@ -1,8 +1,9 @@
+#[allow(dead_code)]
+mod errors;
 mod item;
-
-use crate::item::Item;
+use crate::{errors::ClientConnError, item::Item};
 use std::io::{self, BufRead, Write};
-use std::net::{AddrParseError, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::str::FromStr;
 
 const DEFAULT_NET_TIMEOUT: u32 = 500;
@@ -18,24 +19,24 @@ const RESULT_DELETED: &[u8] = b"DELETED\r\n";
 const RESULT_END: &[u8] = b"END\r\n";
 const RESULT_TOUCHED: &[u8] = b"TOUCHED\r\n";
 
-const VERB_SET: &[u8] = b"set";
-const VERB_ADD: &[u8] = b"add";
-const VERB_REPLACE: &[u8] = b"replace";
-const VERB_APPEND: &[u8] = b"append";
-const VERB_PREPEND: &[u8] = b"prepend";
-const VERB_CAS: &[u8] = b"cas";
+const VERB_SET: &str = "set";
+const VERB_ADD: &str = "add";
+const VERB_REPLACE: &str = "replace";
+const VERB_APPEND: &str = "append";
+const VERB_PREPEND: &str = "prepend";
+const VERB_CAS: &str = "cas";
 const VERB_GET: &str = "get";
-const VERB_GETS: &[u8] = b"gets";
-const VERB_DELETE: &[u8] = b"delete";
-const VERB_INCR: &[u8] = b"incr";
-const VERB_DECR: &[u8] = b"decr";
-const VERB_TOUCH: &[u8] = b"touch";
-const VERB_GAT: &[u8] = b"gat";
-const VERB_GATS: &[u8] = b"gats";
-const VERB_STATS: &[u8] = b"stats";
-const VERB_FLUSH_ALL: &[u8] = b"flush_all";
-const VERB_VERSION: &[u8] = b"version";
-const VERB_QUIT: &[u8] = b"quit";
+const VERB_GETS: &str = "gets";
+const VERB_DELETE: &str = "delete";
+const VERB_INCR: &str = "incr";
+const VERB_DECR: &str = "decr";
+const VERB_TOUCH: &str = "touch";
+const VERB_GAT: &str = "gat";
+const VERB_GATS: &str = "gats";
+const VERB_STATS: &str = "stats";
+const VERB_FLUSH_ALL: &str = "flush_all";
+const VERB_VERSION: &str = "version";
+const VERB_QUIT: &str = "quit";
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -48,24 +49,6 @@ pub struct Client {
     timeout: u32,
     // Max idle connections
     max_idle_cons: u8,
-}
-
-#[derive(Debug)]
-pub enum ClientConnError {
-    AddrParseError(AddrParseError),
-    TcpConnectError(io::Error),
-}
-
-impl From<AddrParseError> for ClientConnError {
-    fn from(error: AddrParseError) -> Self {
-        Self::AddrParseError(error)
-    }
-}
-
-impl From<io::Error> for ClientConnError {
-    fn from(error: io::Error) -> Self {
-        Self::TcpConnectError(error)
-    }
 }
 
 impl Client {
@@ -198,6 +181,7 @@ impl Client {
         if let Err(_) = conn.reader.read_until(b'\n', &mut read_buf) {
             return Err("Could not read server message");
         }
+
         // Errors
         match read_buf.as_slice() {
             RESULT_STORED => Ok(()),
