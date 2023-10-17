@@ -86,26 +86,26 @@ impl Client {
     }
 
     // Abstraction `with_key_addr` missing as we only support a single server for now;
-    pub fn get(&mut self, key: String) -> Result<Item, &'static str> {
+    // TODO: Unwraps
+    pub fn get(&mut self, key: String) -> Result<Option<Item>, OperationError> {
         if !legal_key(&key) {
-            return Err("Invalid item key");
+            return Err(OperationError::MalformedKeyError);
         }
         let conn = &mut self.conns[0];
         conn.writer
             .write_fmt(format_args!("{} {}\r\n", VERB_GET, key))
-            .map_err(|_| "Could not write get command")?;
+            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
         conn.writer
             .flush()
-            .map_err(|_| "Could not send get command to server")?;
+            .map_err(|error| OperationError::IoError(WriteReadLineError::FlushError(error)))?;
 
         // Parse get response
         let mut read_buf: Vec<u8> = Vec::new();
         conn.reader
             .read_until(b'\n', &mut read_buf)
-            .map_err(|_| "Could not read server response")?;
+            .map_err(|error| OperationError::IoError(WriteReadLineError::ReadError(error)))?;
         if read_buf.as_slice() == RESULT_END {
-            // Different behavior from gomemcache
-            return Err("Item not found");
+            return Ok(None);
         }
         // Scan get response line
         if read_buf.ends_with(CR_LF) {
@@ -114,85 +114,103 @@ impl Client {
         }
         let mut split = read_buf.split(|&x| x == b' ');
         let _ = split.next(); // NOTE: Ignore first token
-        let key = String::from_utf8(split.next().unwrap().to_vec())
-            .map_err(|_| "Could not parse key: {}")?;
-        let flags = String::from_utf8(split.next().unwrap().to_vec())
-            .map_err(|_| "Could not parse flags")?;
+        let key = String::from_utf8(split.next().unwrap().to_vec()).map_err(|error| {
+            OperationError::CorruptResponseError(format!("could not parse the item key: {}", error))
+        })?;
+        let flags = String::from_utf8(split.next().unwrap().to_vec()).map_err(|error| {
+            OperationError::CorruptResponseError(format!("could not parse flags: {}", error))
+        })?;
         let flags = match flags.parse::<u32>() {
             Ok(flags) => flags,
-            Err(_) => return Err("Could not parse flags"),
+            Err(error) => {
+                return Err(OperationError::CorruptResponseError(format!(
+                    "could not convert flags into an integer: {}",
+                    error
+                )))
+            }
         };
 
-        let size = String::from_utf8(split.next().unwrap().to_vec())
-            .map_err(|_| "Could not parse size")?;
+        let size = String::from_utf8(split.next().unwrap().to_vec()).map_err(|error| {
+            OperationError::CorruptResponseError(format!("could not parse size: {}", error))
+        })?;
 
         let size = match size.parse::<u32>() {
             Ok(size) => size,
-            Err(_) => return Err("Could not parse the item value size"),
+            Err(error) => {
+                return Err(OperationError::CorruptResponseError(format!(
+                    "could parse the item value size: {}",
+                    error
+                )))
+            }
         };
 
         let mut value_buf: Vec<u8> = Vec::new();
         conn.reader
             .read_until(b'\n', &mut value_buf)
-            .map_err(|_| "Could not read value")?;
+            .map_err(|error| {
+                OperationError::CorruptResponseError(format!("could not read value: {}", error))
+            })?;
         if value_buf.ends_with(CR_LF) {
             value_buf.pop();
             value_buf.pop();
         }
 
-        // NOTE: Unwrap
         if size != value_buf.len().try_into().unwrap() {
-            return Err("Size does not match value length");
+            return Err(OperationError::CorruptResponseError(String::from(
+                "Size does not match value length",
+            )));
         }
 
-        return Ok(Item::new(key, value_buf, flags, 0));
+        return Ok(Some(Item::new(key, value_buf, flags, 0)));
     }
 
     // TODO: Error
     // NOTE: Item reference?
-    pub fn add(&mut self, item: Item) -> Result<(), &'static str> {
-        Client::populate_one(&mut self.conns[0], "add", item)
+    pub fn add(&mut self, item: Item) -> Result<(), OperationError> {
+        Client::populate_one(&mut self.conns[0], VERB_ADD, item)
     }
 
     // TODO: Error
     // TODO: returns?
     // NOTE: Populate one what?
-    fn populate_one(conn: &mut Conn, verb: &str, item: Item) -> Result<(), &'static str> {
+    fn populate_one(conn: &mut Conn, verb: &str, item: Item) -> Result<(), OperationError> {
         if !legal_key(&item.key) {
-            return Err("Invalid item key");
+            return Err(OperationError::MalformedKeyError);
         }
         // NOTE: Include all in one write?
-        if let Err(_) = conn.writer.write_fmt(format_args!(
-            "{} {} {} {} {}\r\n",
-            verb,
-            item.key,
-            item.flags,
-            item.expiration,
-            item.value.len(),
-        )) {
-            return Err("Could write set item command");
-        }
-        if let Err(_) = conn.writer.write_all(&item.value) {
-            return Err("Could write item");
-        }
-        if let Err(_) = conn.writer.write_all(b"\r\n") {
-            return Err("Could write limiter");
-        }
-        if let Err(_) = conn.writer.flush() {
-            return Err("Could not send item to server");
-        }
+        conn.writer
+            .write_fmt(format_args!(
+                "{} {} {} {} {}\r\n",
+                verb,
+                item.key,
+                item.flags,
+                item.expiration,
+                item.value.len(),
+            ))
+            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
+        conn.writer
+            .write_all(&item.value)
+            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
+        conn.writer
+            .write_all(b"\r\n")
+            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
+        conn.writer
+            .flush()
+            .map_err(|error| OperationError::IoError(WriteReadLineError::FlushError(error)))?;
         let mut read_buf: Vec<u8> = Vec::new();
-        if let Err(_) = conn.reader.read_until(b'\n', &mut read_buf) {
-            return Err("Could not read server message");
-        }
+        conn.reader
+            .read_until(b'\n', &mut read_buf)
+            .map_err(|error| OperationError::IoError(WriteReadLineError::ReadError(error)))?;
 
-        // Errors
         match read_buf.as_slice() {
             RESULT_STORED => Ok(()),
-            RESULT_NOT_STORED => Err("Item not stored"),
-            RESULT_EXISTS => Err("Item already exists"),
-            RESULT_NOT_FOUND => Err("Item not found"),
-            _ => Err("Unknown error"),
+            RESULT_NOT_STORED => Err(OperationError::NotStoredError),
+            RESULT_EXISTS => Err(OperationError::CASConflictError),
+            RESULT_NOT_FOUND => Err(OperationError::CacheMissError),
+            _ => Err(OperationError::CorruptResponseError(format!(
+                "Unexpected response from server: {}",
+                String::from_utf8(read_buf).unwrap(), // TODO: Unwrap
+            ))),
         }
     }
 
@@ -287,17 +305,21 @@ mod tests {
             panic!("Expected item to be successfully persisted")
         }
 
-        // Clone?
+        // NOTE: Clone?
         let item = match client.get(item_key.clone()) {
             Ok(item) => item,
             Err(error) => panic!("Expected item to be successfully retrieved: {}", error),
         };
 
-        if item.value != item_value {
-            panic!("Expected value to be red")
-        }
-        if item.flags != item_flags {
-            panic!("Expected flags to be 0")
+        if let Some(item) = item {
+            if item.value != item_value {
+                panic!("Expected value to be red")
+            }
+            if item.flags != item_flags {
+                panic!("Expected flags to be 0")
+            }
+        } else {
+            panic!("Expected an item")
         }
     }
 }

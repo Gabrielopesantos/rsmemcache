@@ -20,8 +20,6 @@ impl From<io::Error> for ConnError {
     }
 }
 
-impl std::error::Error for ConnError {}
-
 impl std::fmt::Display for ConnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -35,17 +33,56 @@ impl std::fmt::Display for ConnError {
     }
 }
 
+impl std::error::Error for ConnError {}
+
 #[derive(Debug)]
 pub enum OperationError {
-    CacheMissError(String),
-    CASConflictError(String),
-    NotStoredError(String),
-    ServerError(String),
-    NoStatsError(String),
-    MalformedKeyError(String),
-    NoServersError(String),
+    CacheMissError,
+    CASConflictError,
+    NotStoredError,
+    ServerError,
+    NoStatsError,
+    MalformedKeyError,
+    NoServersError,
+    CorruptResponseError(String),
     IoError(WriteReadLineError),
 }
+
+impl std::fmt::Display for OperationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OperationError::CacheMissError => {
+                write!(f, "Cache miss error")
+            }
+            OperationError::CASConflictError => {
+                write!(f, "CAS conflict error")
+            }
+            OperationError::NotStoredError => {
+                write!(f, "Not stored error")
+            }
+            OperationError::ServerError => {
+                write!(f, "Server error")
+            }
+            OperationError::NoStatsError => {
+                write!(f, "No stats error")
+            }
+            OperationError::MalformedKeyError => {
+                write!(f, "Malformed key error")
+            }
+            OperationError::NoServersError => {
+                write!(f, "No servers error")
+            }
+            OperationError::CorruptResponseError(error) => {
+                write!(f, "Corrupt response error: {}", error)
+            }
+            OperationError::IoError(error) => {
+                write!(f, "IO error: {}", error)
+            }
+        }
+    }
+}
+
+impl std::error::Error for OperationError {}
 
 #[derive(Debug)]
 pub enum WriteReadLineError {
