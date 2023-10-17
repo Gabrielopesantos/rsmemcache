@@ -164,13 +164,15 @@ impl Client {
         return Ok(Some(Item::new(key, value_buf, flags, 0)));
     }
 
-    // TODO: Error
     // NOTE: Item reference?
     pub fn add(&mut self, item: Item) -> Result<(), OperationError> {
         Client::populate_one(&mut self.conns[0], VERB_ADD, item)
     }
 
-    // TODO: Error
+    pub fn set(&mut self, item: Item) -> Result<(), OperationError> {
+        Client::populate_one(&mut self.conns[0], VERB_SET, item)
+    }
+
     // TODO: returns?
     // NOTE: Populate one what?
     fn populate_one(conn: &mut Conn, verb: &str, item: Item) -> Result<(), OperationError> {
