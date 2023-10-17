@@ -1,7 +1,10 @@
 #[allow(dead_code)]
 mod errors;
 mod item;
-use crate::{errors::ClientConnError, item::Item};
+use crate::{
+    errors::{ConnError, OperationError, WriteReadLineError},
+    item::Item,
+};
 use std::io::{self, BufRead, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::str::FromStr;
@@ -52,17 +55,19 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(
-        server_addr: String,
-        timeout: u32,
-        max_idle_conns: u8,
-    ) -> Result<Self, ClientConnError> {
+    pub fn new(server_addr: String, timeout: u32, max_idle_conns: u8) -> Result<Self, ConnError> {
         let socket_addr = SocketAddr::from_str(&server_addr)?;
         let tcp_stream = TcpStream::connect(socket_addr)?;
 
         let mut server_conns: Vec<Conn> = Vec::new();
         // NOTE: Lazily create connections or start with one?
-        server_conns.push(Conn::new(tcp_stream));
+        let conn = Conn::new(tcp_stream).map_err(|error| {
+            ConnError::TcpConnectError(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to create connection: {}", error.to_string()),
+            ))
+        })?;
+        server_conns.push(conn);
 
         Ok(Self {
             server_addr: socket_addr,
@@ -72,12 +77,11 @@ impl Client {
         })
     }
 
-    // TODO: Error
-    pub fn ping(&mut self) -> Result<(), &'static str> {
+    pub fn ping(&mut self) -> Result<(), OperationError> {
         // TODO: Select server
         match self.conns[0].write_read_line(b"version\r\n") {
             Ok(_) => Ok(()),
-            Err(_) => Err("Failed to ping server"),
+            Err(error) => Err(OperationError::IoError(error)),
         }
     }
 
@@ -209,37 +213,31 @@ impl Client {
 
 #[derive(Debug)]
 struct Conn {
-    stream: TcpStream,
+    // stream: TcpStream, // NOTE: Is this needed?
     reader: io::BufReader<TcpStream>,
     writer: io::BufWriter<TcpStream>,
 }
 
 impl Conn {
-    fn new(stream: TcpStream) -> Self {
-        // FIXME: try_clone / expect
-        Self {
-            stream: stream.try_clone().expect("Clone failed!"), // NOTE: Needed?
-            reader: io::BufReader::new(stream.try_clone().expect("Clone failed!")),
-            writer: io::BufWriter::new(stream.try_clone().expect("Clone failed!")),
-        }
+    fn new(stream: TcpStream) -> Result<Self, std::io::Error> {
+        Ok(Self {
+            reader: io::BufReader::new(stream.try_clone()?),
+            writer: io::BufWriter::new(stream),
+        })
     }
 
-    fn write_read_line(&mut self, write_buf: &[u8]) -> Result<Vec<u8>, &'static str> {
-        if let Err(_) = self.writer.write_all(write_buf) {
-            return Err("Could not write to buffer");
-        }
-        if let Err(_) = self.writer.flush() {
-            return Err("Could not send buffer to server");
-        }
-
+    fn write_read_line(&mut self, write_buf: &[u8]) -> Result<Vec<u8>, WriteReadLineError> {
+        self.writer
+            .write_all(write_buf)
+            .map_err(WriteReadLineError::WriteError)?;
+        self.writer
+            .flush()
+            .map_err(WriteReadLineError::FlushError)?;
         let mut read_buf: Vec<u8> = Vec::new();
-        match self.reader.read_until(b'\n', &mut read_buf) {
-            Ok(bytes_read) => {
-                print!("Successfully read {} bytes", bytes_read);
-                Ok(read_buf)
-            }
-            Err(_) => return Err("Could not read from server"),
-        }
+        self.reader
+            .read_until(b'\n', &mut read_buf)
+            .map_err(WriteReadLineError::ReadError)?;
+        Ok(read_buf)
     }
 }
 
@@ -252,7 +250,7 @@ fn legal_key(key: &String) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::item::Item;
+    use crate::{errors::ConnError, item::Item};
 
     use super::Client;
     const LOCALHOST_TCP_ADDR: &str = "127.0.0.1:11211";
@@ -262,7 +260,10 @@ mod tests {
         let result = Client::new(String::from("alksdjasld"), 0, 0);
         match result {
             Ok(_) => panic!("Expected creation of new client to fail"),
-            Err(_) => (),
+            Err(error) => match error {
+                ConnError::AddrParseError(_) => (), // Expected error,
+                _ => panic!("Unexpected error. Got: {:?}", error),
+            },
         };
     }
 
