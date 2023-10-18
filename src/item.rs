@@ -1,5 +1,6 @@
 #[derive(Debug)]
 pub struct Item {
+    // NOTE: Maybe not a `String`?
     pub key: String,
     pub value: Vec<u8>,
     pub flags: u32,

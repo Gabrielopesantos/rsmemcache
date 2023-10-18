@@ -41,6 +41,7 @@ pub enum OperationError {
     CASConflictError,
     NotStoredError,
     ServerError,
+    ClientError(String),
     NoStatsError,
     MalformedKeyError,
     NoServersError,
@@ -52,31 +53,34 @@ impl std::fmt::Display for OperationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OperationError::CacheMissError => {
-                write!(f, "Cache miss error")
+                write!(f, "memcache: cache miss error")
             }
             OperationError::CASConflictError => {
-                write!(f, "CAS conflict error")
+                write!(f, "memcache: CAS conflict error")
             }
             OperationError::NotStoredError => {
-                write!(f, "Not stored error")
+                write!(f, "memcache: not stored error")
             }
             OperationError::ServerError => {
-                write!(f, "Server error")
+                write!(f, "memcache: server error")
+            }
+            OperationError::ClientError(error_msg) => {
+                write!(f, "memcache: client error: {}", error_msg)
             }
             OperationError::NoStatsError => {
-                write!(f, "No stats error")
+                write!(f, "memcache: no stats error")
             }
             OperationError::MalformedKeyError => {
-                write!(f, "Malformed key error")
+                write!(f, "memcache: malformed key error")
             }
             OperationError::NoServersError => {
-                write!(f, "No servers error")
+                write!(f, "memcache: no servers error")
             }
-            OperationError::CorruptResponseError(error) => {
-                write!(f, "Corrupt response error: {}", error)
+            OperationError::CorruptResponseError(error_msg) => {
+                write!(f, "memcache: corrupt response error: {}", error_msg)
             }
             OperationError::IoError(error) => {
-                write!(f, "IO error: {}", error)
+                write!(f, "memcache: IO error: {}", error)
             }
         }
     }

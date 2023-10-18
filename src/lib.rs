@@ -5,7 +5,7 @@ use crate::{
     errors::{ConnError, OperationError, WriteReadLineError},
     item::Item,
 };
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::str::FromStr;
 
@@ -21,6 +21,7 @@ const RESULT_NOT_FOUND: &[u8] = b"NOT_FOUND\r\n";
 const RESULT_DELETED: &[u8] = b"DELETED\r\n";
 const RESULT_END: &[u8] = b"END\r\n";
 const RESULT_TOUCHED: &[u8] = b"TOUCHED\r\n";
+const RESULT_CLIENT_ERROR_PREFIX: &[u8] = b"CLIENT_ERROR ";
 
 const VERB_SET: &str = "set";
 const VERB_ADD: &str = "add";
@@ -64,7 +65,7 @@ impl Client {
         let conn = Conn::new(tcp_stream).map_err(|error| {
             ConnError::TcpConnectError(io::Error::new(
                 io::ErrorKind::Other,
-                format!("Failed to create connection: {}", error.to_string()),
+                format!("failed to create connection: {}", error.to_string()),
             ))
         })?;
         server_conns.push(conn);
@@ -144,22 +145,21 @@ impl Client {
             }
         };
 
-        let mut value_buf: Vec<u8> = Vec::new();
-        conn.reader
-            .read_until(b'\n', &mut value_buf)
-            .map_err(|error| {
-                OperationError::CorruptResponseError(format!("could not read value: {}", error))
-            })?;
-        if value_buf.ends_with(CR_LF) {
+        let mut value_buf = vec![0; size as usize + 2];
+        conn.reader.read_exact(&mut value_buf).map_err(|error| {
+            OperationError::CorruptResponseError(format!("could not read value: {}", error))
+        })?;
+        if !value_buf.ends_with(CR_LF) {
+            return Err(OperationError::CorruptResponseError(
+                "corrupt get result read".to_string(),
+            ));
+        } else {
             value_buf.pop();
             value_buf.pop();
         }
 
-        if size != value_buf.len().try_into().unwrap() {
-            return Err(OperationError::CorruptResponseError(String::from(
-                "Size does not match value length",
-            )));
-        }
+        // NOTE: Still missing read `END\r\n`
+        let _ = conn.reader.read_until(b'\n', &mut Vec::new());
 
         return Ok(Some(Item::new(key, value_buf, flags, 0)));
     }
@@ -173,8 +173,29 @@ impl Client {
         Client::populate_one(&mut self.conns[0], VERB_SET, item)
     }
 
+    pub fn replace(&mut self, item: Item) -> Result<(), OperationError> {
+        Client::populate_one(&mut self.conns[0], VERB_REPLACE, item)
+    }
+
+    pub fn append(&mut self, item: Item) -> Result<(), OperationError> {
+        Client::populate_one(&mut self.conns[0], VERB_APPEND, item)
+    }
+
+    pub fn prepend(&mut self, item: Item) -> Result<(), OperationError> {
+        Client::populate_one(&mut self.conns[0], VERB_PREPEND, item)
+    }
+
+    pub fn increment(&mut self, key: String, delta: u64) -> Result<u64, OperationError> {
+        Client::incr_decr(&mut self.conns[0], VERB_INCR, key, delta)
+    }
+
+    pub fn decrement(&mut self, key: String, delta: u64) -> Result<u64, OperationError> {
+        Client::incr_decr(&mut self.conns[0], VERB_DECR, key, delta)
+    }
+
     // TODO: returns?
     // NOTE: Populate one what?
+    // NOTE: Why does this not use `write_read_line`?
     fn populate_one(conn: &mut Conn, verb: &str, item: Item) -> Result<(), OperationError> {
         if !legal_key(&item.key) {
             return Err(OperationError::MalformedKeyError);
@@ -210,10 +231,39 @@ impl Client {
             RESULT_EXISTS => Err(OperationError::CASConflictError),
             RESULT_NOT_FOUND => Err(OperationError::CacheMissError),
             _ => Err(OperationError::CorruptResponseError(format!(
-                "Unexpected response from server: {}",
+                "unexpected response from server: {}",
                 String::from_utf8(read_buf).unwrap(), // TODO: Unwrap
             ))),
         }
+    }
+
+    fn incr_decr(
+        conn: &mut Conn,
+        verb: &str,
+        key: String,
+        delta: u64,
+    ) -> Result<u64, OperationError> {
+        let line = conn
+            .write_read_line(&format!("{} {} {}\r\n", verb, key, delta).into_bytes())
+            .map_err(|error| OperationError::IoError(error))?;
+        if line.as_slice() == RESULT_NOT_FOUND {
+            return Err(OperationError::CacheMissError);
+        }
+        if line.starts_with(RESULT_CLIENT_ERROR_PREFIX) {
+            let error_msg =
+                String::from_utf8(line[RESULT_CLIENT_ERROR_PREFIX.len()..&line.len() - 2].to_vec())
+                    .unwrap_or("".to_string()); // TODO: FIX
+            return Err(OperationError::ClientError(error_msg));
+        }
+        let result = String::from_utf8(line[..line.len() - 2].to_vec())
+            .map_err(|_| {
+                OperationError::CorruptResponseError("invalid UTF-8 sequence".to_string())
+            })?
+            .parse::<u64>()
+            .map_err(|_| {
+                OperationError::CorruptResponseError("failed to parse integer".to_string())
+            });
+        result
     }
 
     fn net_timout(input_value: u32) -> u32 {
@@ -279,10 +329,10 @@ mod tests {
     fn invalid_server_addr_returns_err() {
         let result = Client::new(String::from("alksdjasld"), 0, 0);
         match result {
-            Ok(_) => panic!("Expected creation of new client to fail"),
+            Ok(_) => panic!("expected creation of new client to fail"),
             Err(error) => match error {
                 ConnError::AddrParseError(_) => (), // Expected error,
-                _ => panic!("Unexpected error. Got: {:?}", error),
+                _ => panic!("unexpected error. Got: {:?}", error),
             },
         };
     }
@@ -291,37 +341,57 @@ mod tests {
     fn test_local_host() {
         let mut client = match Client::new(String::from(LOCALHOST_TCP_ADDR), 0, 0) {
             Ok(client) => client,
-            Err(error) => panic!("Could not connect to local server: {:?}", error),
+            Err(error) => panic!("could not connect to local server: {:?}", error),
         };
 
         if let Err(_) = client.ping() {
-            panic!("Expected ping to succeed")
+            panic!("expected ping to succeed")
         }
 
-        // NOTE: Expiration 5 so tests don't fail on subsequent runs;
-        let item_key = String::from("color");
+        // NOTE: Setting `expiration` to 5 seconds so tests don't fail on subsequent runs;
+        let item_key = "color".to_string();
         let item_value = Vec::from("red");
         let item_flags = 32;
         let item = Item::new(item_key.clone(), item_value.clone(), item_flags, 5);
         if let Err(_) = client.add(item) {
-            panic!("Expected item to be successfully persisted")
+            panic!("expected item to be successfully persisted")
         }
 
         // NOTE: Clone?
         let item = match client.get(item_key.clone()) {
             Ok(item) => item,
-            Err(error) => panic!("Expected item to be successfully retrieved: {}", error),
+            Err(error) => panic!("expected item to be successfully retrieved: {}", error),
         };
 
         if let Some(item) = item {
             if item.value != item_value {
-                panic!("Expected value to be red")
+                panic!("expected value to be red")
             }
             if item.flags != item_flags {
-                panic!("Expected flags to be 0")
+                panic!("expected flags to be 0")
             }
         } else {
-            panic!("Expected an item")
+            panic!("expected an item")
+        }
+
+        // Test `increment`
+        let item_key = "number".to_string();
+        let num = 26;
+        let delta = 10;
+        let num_item = Item::new(item_key.clone(), Vec::from(num.to_string()), 0, 15);
+        if let Err(error) = client.set(num_item) {
+            panic!("did not expect set to fail: {}", error)
+        }
+
+        match client.increment(item_key, delta) {
+            Ok(incr_num) => {
+                if incr_num != num + delta {
+                    panic!("expected incremented number ({}) to match with the initial number plus delta ({})", incr_num, num + delta)
+                }
+            }
+            Err(error) => {
+                panic!("did not expected increment to fail: {}", error)
+            }
         }
     }
 }
