@@ -193,6 +193,14 @@ impl Client {
         Client::incr_decr(&mut self.conns[0], VERB_DECR, key, delta)
     }
 
+    pub fn delete(&mut self, key: String) -> Result<(), OperationError> {
+        Client::write_expectf(
+            &mut self.conns[0],
+            RESULT_DELETED,
+            format!("delete {}\r\n", key),
+        )
+    }
+
     // TODO: returns?
     // NOTE: Populate one what?
     // NOTE: Why does this not use `write_read_line`?
@@ -252,7 +260,7 @@ impl Client {
         if line.starts_with(RESULT_CLIENT_ERROR_PREFIX) {
             let error_msg =
                 String::from_utf8(line[RESULT_CLIENT_ERROR_PREFIX.len()..&line.len() - 2].to_vec())
-                    .unwrap_or("".to_string()); // TODO: FIX
+                    .unwrap_or_default(); // TODO: FIX
             return Err(OperationError::ClientError(error_msg));
         }
         let result = String::from_utf8(line[..line.len() - 2].to_vec())
@@ -264,6 +272,29 @@ impl Client {
                 OperationError::CorruptResponseError("failed to parse integer".to_string())
             });
         result
+    }
+
+    // NOTE: `expect` String?
+    fn write_expectf(
+        conn: &mut Conn,
+        expect: &[u8],
+        write_buf: String,
+    ) -> Result<(), OperationError> {
+        let line = conn
+            .write_read_line(write_buf.as_bytes()) // TODO: ?
+            .map_err(|error| OperationError::IoError(error))?;
+
+        match line.as_slice() {
+            _ if line.as_slice() == expect => Ok(()),
+            RESULT_OK => Ok(()),
+            RESULT_NOT_STORED => Err(OperationError::NotStoredError),
+            RESULT_EXISTS => Err(OperationError::CASConflictError),
+            RESULT_NOT_FOUND => Err(OperationError::CacheMissError),
+            _ => Err(OperationError::CorruptResponseError(format!(
+                "unexpected response line: {}",
+                String::from_utf8(line).unwrap_or_default() // TODO: Unwrap
+            ))),
+        }
     }
 
     fn net_timout(input_value: u32) -> u32 {
@@ -374,7 +405,7 @@ mod tests {
             panic!("expected an item")
         }
 
-        // Test `increment`
+        // Test `increment` and `decrement`
         let item_key = "number".to_string();
         let num = 26;
         let delta = 10;
@@ -383,7 +414,7 @@ mod tests {
             panic!("did not expect set to fail: {}", error)
         }
 
-        match client.increment(item_key, delta) {
+        match client.increment(item_key.clone(), delta) {
             Ok(incr_num) => {
                 if incr_num != num + delta {
                     panic!("expected incremented number ({}) to match with the initial number plus delta ({})", incr_num, num + delta)
@@ -392,6 +423,25 @@ mod tests {
             Err(error) => {
                 panic!("did not expected increment to fail: {}", error)
             }
+        }
+
+        match client.decrement(item_key.clone(), delta) {
+            Ok(incr_num) => {
+                if incr_num != num {
+                    panic!(
+                        "expected decremented number ({}) to match with the initial number ({})",
+                        incr_num, num
+                    )
+                }
+            }
+            Err(error) => {
+                panic!("did not expected increment to fail: {}", error)
+            }
+        }
+
+        // Test `delete`
+        if let Err(error) = client.delete(item_key) {
+            panic!("Did not expect delete to fail: {}", error)
         }
     }
 }
