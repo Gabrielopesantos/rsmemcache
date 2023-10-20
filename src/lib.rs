@@ -1,4 +1,4 @@
-#[allow(dead_code)]
+#![allow(dead_code)]
 mod errors;
 mod item;
 use crate::{
@@ -65,7 +65,7 @@ impl Client {
         let conn = Conn::new(tcp_stream).map_err(|error| {
             ConnError::TcpConnectError(io::Error::new(
                 io::ErrorKind::Other,
-                format!("failed to create connection: {}", error.to_string()),
+                format!("failed to create connection: {}", error),
             ))
         })?;
         server_conns.push(conn);
@@ -82,7 +82,7 @@ impl Client {
         // TODO: Select server
         match self.conns[0].write_read_line(format!("{}\r\n", VERB_VERSION).as_bytes()) {
             Ok(_) => Ok(()),
-            Err(error) => Err(OperationError::IoError(error)),
+            Err(error) => Err(OperationError::Io(error)),
         }
     }
 
@@ -90,21 +90,21 @@ impl Client {
     // TODO: Unwraps
     pub fn get(&mut self, key: String) -> Result<Option<Item>, OperationError> {
         if !legal_key(&key) {
-            return Err(OperationError::MalformedKeyError);
+            return Err(OperationError::MalformedKey);
         }
         let conn = &mut self.conns[0];
         conn.writer
             .write_fmt(format_args!("{} {}\r\n", VERB_GET, key))
-            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Write(error)))?;
         conn.writer
             .flush()
-            .map_err(|error| OperationError::IoError(WriteReadLineError::FlushError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Flush(error)))?;
 
         // Parse get response
         let mut read_buf: Vec<u8> = Vec::new();
         conn.reader
             .read_until(b'\n', &mut read_buf)
-            .map_err(|error| OperationError::IoError(WriteReadLineError::ReadError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Read(error)))?;
         if read_buf.as_slice() == RESULT_END {
             return Ok(None);
         }
@@ -116,15 +116,15 @@ impl Client {
         let mut split = read_buf.split(|&x| x == b' ');
         let _ = split.next(); // NOTE: Ignore first token
         let key = String::from_utf8(split.next().unwrap().to_vec()).map_err(|error| {
-            OperationError::CorruptResponseError(format!("could not parse the item key: {}", error))
+            OperationError::CorruptResponse(format!("could not parse the item key: {}", error))
         })?;
         let flags = String::from_utf8(split.next().unwrap().to_vec()).map_err(|error| {
-            OperationError::CorruptResponseError(format!("could not parse flags: {}", error))
+            OperationError::CorruptResponse(format!("could not parse flags: {}", error))
         })?;
         let flags = match flags.parse::<u32>() {
             Ok(flags) => flags,
             Err(error) => {
-                return Err(OperationError::CorruptResponseError(format!(
+                return Err(OperationError::CorruptResponse(format!(
                     "could not convert flags into an integer: {}",
                     error
                 )))
@@ -132,13 +132,13 @@ impl Client {
         };
 
         let size = String::from_utf8(split.next().unwrap().to_vec()).map_err(|error| {
-            OperationError::CorruptResponseError(format!("could not parse size: {}", error))
+            OperationError::CorruptResponse(format!("could not parse size: {}", error))
         })?;
 
         let size = match size.parse::<u32>() {
             Ok(size) => size,
             Err(error) => {
-                return Err(OperationError::CorruptResponseError(format!(
+                return Err(OperationError::CorruptResponse(format!(
                     "could parse the item value size: {}",
                     error
                 )))
@@ -147,10 +147,10 @@ impl Client {
 
         let mut value_buf = vec![0; size as usize + 2];
         conn.reader.read_exact(&mut value_buf).map_err(|error| {
-            OperationError::CorruptResponseError(format!("could not read value: {}", error))
+            OperationError::CorruptResponse(format!("could not read value: {}", error))
         })?;
         if !value_buf.ends_with(CR_LF) {
-            return Err(OperationError::CorruptResponseError(
+            return Err(OperationError::CorruptResponse(
                 "corrupt get result read".to_string(),
             ));
         } else {
@@ -161,7 +161,7 @@ impl Client {
         // NOTE: Still missing read `END\r\n`
         let _ = conn.reader.read_until(b'\n', &mut Vec::new());
 
-        return Ok(Some(Item::new(key, value_buf, flags, 0)));
+        Ok(Some(Item::new(key, value_buf, flags, 0)))
     }
 
     // NOTE: Item reference?
@@ -228,7 +228,7 @@ impl Client {
     // NOTE: Why does this not use `write_read_line`?
     fn populate_one(conn: &mut Conn, verb: &str, item: Item) -> Result<(), OperationError> {
         if !legal_key(&item.key) {
-            return Err(OperationError::MalformedKeyError);
+            return Err(OperationError::MalformedKey);
         }
         // NOTE: Include all in one write?
         conn.writer
@@ -240,29 +240,29 @@ impl Client {
                 item.expiration,
                 item.value.len(),
             ))
-            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Write(error)))?;
         conn.writer
             .write_all(&item.value)
-            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Write(error)))?;
         conn.writer
             .write_all(b"\r\n")
-            .map_err(|error| OperationError::IoError(WriteReadLineError::WriteError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Write(error)))?;
         conn.writer
             .flush()
-            .map_err(|error| OperationError::IoError(WriteReadLineError::FlushError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Flush(error)))?;
         let mut read_buf: Vec<u8> = Vec::new();
         conn.reader
             .read_until(b'\n', &mut read_buf)
-            .map_err(|error| OperationError::IoError(WriteReadLineError::ReadError(error)))?;
+            .map_err(|error| OperationError::Io(WriteReadLineError::Read(error)))?;
 
         match read_buf.as_slice() {
             RESULT_STORED => Ok(()),
-            RESULT_NOT_STORED => Err(OperationError::NotStoredError),
-            RESULT_EXISTS => Err(OperationError::CASConflictError),
-            RESULT_NOT_FOUND => Err(OperationError::CacheMissError),
-            _ => Err(OperationError::CorruptResponseError(format!(
+            RESULT_NOT_STORED => Err(OperationError::NotStored),
+            RESULT_EXISTS => Err(OperationError::CASConflict),
+            RESULT_NOT_FOUND => Err(OperationError::CacheMiss),
+            _ => Err(OperationError::CorruptResponse(format!(
                 "unexpected response from server: {}",
-                String::from_utf8(read_buf).unwrap(), // TODO: Unwrap
+                String::from_utf8(read_buf).unwrap_or_default(), // TODO: Unwrap
             ))),
         }
     }
@@ -275,25 +275,20 @@ impl Client {
     ) -> Result<u64, OperationError> {
         let line = conn
             .write_read_line(format!("{} {} {}\r\n", verb, key, delta).as_bytes())
-            .map_err(|error| OperationError::IoError(error))?;
+            .map_err(OperationError::Io)?;
         if line.as_slice() == RESULT_NOT_FOUND {
-            return Err(OperationError::CacheMissError);
+            return Err(OperationError::CacheMiss);
         }
         if line.starts_with(RESULT_CLIENT_ERROR_PREFIX) {
             let error_msg =
                 String::from_utf8(line[RESULT_CLIENT_ERROR_PREFIX.len()..&line.len() - 2].to_vec())
                     .unwrap_or_default(); // TODO: FIX
-            return Err(OperationError::ClientError(error_msg));
+            return Err(OperationError::Client(error_msg));
         }
-        let result = String::from_utf8(line[..line.len() - 2].to_vec())
-            .map_err(|_| {
-                OperationError::CorruptResponseError("invalid UTF-8 sequence".to_string())
-            })?
+        String::from_utf8(line[..line.len() - 2].to_vec())
+            .map_err(|_| OperationError::CorruptResponse("invalid UTF-8 sequence".to_string()))?
             .parse::<u64>()
-            .map_err(|_| {
-                OperationError::CorruptResponseError("failed to parse integer".to_string())
-            });
-        result
+            .map_err(|_| OperationError::CorruptResponse("failed to parse integer".to_string()))
     }
 
     // NOTE: `expect` String?
@@ -305,15 +300,15 @@ impl Client {
     ) -> Result<(), OperationError> {
         let line = conn
             .write_read_line(write_buf) // TODO: ?
-            .map_err(|error| OperationError::IoError(error))?;
+            .map_err(OperationError::Io)?;
 
         match line.as_slice() {
             _ if line.as_slice() == expect => Ok(()),
             RESULT_OK => Ok(()),
-            RESULT_NOT_STORED => Err(OperationError::NotStoredError),
-            RESULT_EXISTS => Err(OperationError::CASConflictError),
-            RESULT_NOT_FOUND => Err(OperationError::CacheMissError),
-            _ => Err(OperationError::CorruptResponseError(format!(
+            RESULT_NOT_STORED => Err(OperationError::NotStored),
+            RESULT_EXISTS => Err(OperationError::CASConflict),
+            RESULT_NOT_FOUND => Err(OperationError::CacheMiss),
+            _ => Err(OperationError::CorruptResponse(format!(
                 "unexpected response line: {}", // TODO: Include command here `from {}`
                 String::from_utf8(line).unwrap_or_default()  // TODO: Unwrap
             ))),
@@ -353,21 +348,19 @@ impl Conn {
     fn write_read_line(&mut self, write_buf: &[u8]) -> Result<Vec<u8>, WriteReadLineError> {
         self.writer
             .write_all(write_buf)
-            .map_err(WriteReadLineError::WriteError)?;
-        self.writer
-            .flush()
-            .map_err(WriteReadLineError::FlushError)?;
+            .map_err(WriteReadLineError::Write)?;
+        self.writer.flush().map_err(WriteReadLineError::Flush)?;
         let mut read_buf: Vec<u8> = Vec::new();
         self.reader
             .read_until(b'\n', &mut read_buf)
-            .map_err(WriteReadLineError::ReadError)?;
+            .map_err(WriteReadLineError::Read)?;
         Ok(read_buf)
     }
 }
 
 fn legal_key(key: &String) -> bool {
     if key.len() > 250 {
-        false;
+        return false;
     }
     true
 }

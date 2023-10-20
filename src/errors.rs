@@ -37,49 +37,49 @@ impl std::error::Error for ConnError {}
 
 #[derive(Debug)]
 pub enum OperationError {
-    CacheMissError,
-    CASConflictError,
-    NotStoredError,
-    ServerError,
-    ClientError(String),
-    NoStatsError,
-    MalformedKeyError,
-    NoServersError,
-    CorruptResponseError(String),
-    IoError(WriteReadLineError),
+    CacheMiss,
+    CASConflict,
+    NotStored,
+    Server,
+    Client(String),
+    NoStats,
+    MalformedKey,
+    NoServers,
+    CorruptResponse(String),
+    Io(WriteReadLineError),
 }
 
 impl std::fmt::Display for OperationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OperationError::CacheMissError => {
+            OperationError::CacheMiss => {
                 write!(f, "memcache: cache miss error")
             }
-            OperationError::CASConflictError => {
+            OperationError::CASConflict => {
                 write!(f, "memcache: CAS conflict error")
             }
-            OperationError::NotStoredError => {
+            OperationError::NotStored => {
                 write!(f, "memcache: not stored error")
             }
-            OperationError::ServerError => {
+            OperationError::Server => {
                 write!(f, "memcache: server error")
             }
-            OperationError::ClientError(error_msg) => {
+            OperationError::Client(error_msg) => {
                 write!(f, "memcache: client error: {}", error_msg)
             }
-            OperationError::NoStatsError => {
+            OperationError::NoStats => {
                 write!(f, "memcache: no stats error")
             }
-            OperationError::MalformedKeyError => {
+            OperationError::MalformedKey => {
                 write!(f, "memcache: malformed key error")
             }
-            OperationError::NoServersError => {
+            OperationError::NoServers => {
                 write!(f, "memcache: no servers error")
             }
-            OperationError::CorruptResponseError(error_msg) => {
+            OperationError::CorruptResponse(error_msg) => {
                 write!(f, "memcache: corrupt response error: {}", error_msg)
             }
-            OperationError::IoError(error) => {
+            OperationError::Io(error) => {
                 write!(f, "memcache: IO error: {}", error)
             }
         }
@@ -90,21 +90,21 @@ impl std::error::Error for OperationError {}
 
 #[derive(Debug)]
 pub enum WriteReadLineError {
-    WriteError(io::Error),
-    FlushError(io::Error),
-    ReadError(io::Error),
+    Write(io::Error),
+    Flush(io::Error),
+    Read(io::Error),
 }
 
 impl std::fmt::Display for WriteReadLineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WriteReadLineError::WriteError(error) => {
+            WriteReadLineError::Write(error) => {
                 write!(f, "Could not write to buffer: {}", error)
             }
-            WriteReadLineError::FlushError(error) => {
+            WriteReadLineError::Flush(error) => {
                 write!(f, "Could not flush the buffer to server: {}", error)
             }
-            WriteReadLineError::ReadError(error) => {
+            WriteReadLineError::Read(error) => {
                 write!(f, "Could not read from server: {}", error)
             }
         }
