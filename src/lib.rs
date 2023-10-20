@@ -201,6 +201,20 @@ impl Client {
         )
     }
 
+    // NOTE: Doesn't support optional `expiration` in seconds parameter;
+    pub fn flush_all(&mut self) -> Result<(), OperationError> {
+        Client::write_expectf(&mut self.conns[0], RESULT_OK, "flush_all\r\n".to_string())
+    }
+
+    pub fn delete_all(&mut self) -> Result<(), OperationError> {
+        Client::write_expectf(&mut self.conns[0], RESULT_OK, "flush_all\r\n".to_string())
+    }
+
+    // TODO
+    pub fn touch(&mut self, key: String, seconds: u32) -> Result<(), OperationError> {
+        Ok(())
+    }
+
     // TODO: returns?
     // NOTE: Populate one what?
     // NOTE: Why does this not use `write_read_line`?
@@ -275,6 +289,7 @@ impl Client {
     }
 
     // NOTE: `expect` String?
+    // NOTE: Different arguments from Go's implementation;
     fn write_expectf(
         conn: &mut Conn,
         expect: &[u8],
@@ -291,8 +306,8 @@ impl Client {
             RESULT_EXISTS => Err(OperationError::CASConflictError),
             RESULT_NOT_FOUND => Err(OperationError::CacheMissError),
             _ => Err(OperationError::CorruptResponseError(format!(
-                "unexpected response line: {}",
-                String::from_utf8(line).unwrap_or_default() // TODO: Unwrap
+                "unexpected response line: {}", // TODO: Include command here `from {}`
+                String::from_utf8(line).unwrap_or_default()  // TODO: Unwrap
             ))),
         }
     }
@@ -442,6 +457,10 @@ mod tests {
         // Test `delete`
         if let Err(error) = client.delete(item_key) {
             panic!("Did not expect delete to fail: {}", error)
+        }
+        // Test `flush_all`
+        if let Err(error) = client.flush_all() {
+            panic!("Did not expect flush all to fail: {}", error)
         }
     }
 }
