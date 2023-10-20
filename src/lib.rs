@@ -80,7 +80,7 @@ impl Client {
 
     pub fn ping(&mut self) -> Result<(), OperationError> {
         // TODO: Select server
-        match self.conns[0].write_read_line(b"version\r\n") {
+        match self.conns[0].write_read_line(format!("{}\r\n", VERB_VERSION).as_bytes()) {
             Ok(_) => Ok(()),
             Err(error) => Err(OperationError::IoError(error)),
         }
@@ -197,22 +197,30 @@ impl Client {
         Client::write_expectf(
             &mut self.conns[0],
             RESULT_DELETED,
-            format!("delete {}\r\n", key),
+            format!("{} {}\r\n", VERB_DELETE, key).as_bytes(),
         )
     }
 
     // NOTE: Doesn't support optional `expiration` in seconds parameter;
     pub fn flush_all(&mut self) -> Result<(), OperationError> {
-        Client::write_expectf(&mut self.conns[0], RESULT_OK, "flush_all\r\n".to_string())
+        Client::write_expectf(
+            &mut self.conns[0],
+            RESULT_OK,
+            format!("{}\r\n", VERB_FLUSH_ALL).as_bytes(),
+        )
     }
 
     pub fn delete_all(&mut self) -> Result<(), OperationError> {
-        Client::write_expectf(&mut self.conns[0], RESULT_OK, "flush_all\r\n".to_string())
+        Client::write_expectf(
+            &mut self.conns[0],
+            RESULT_OK,
+            format!("{}\r\n", VERB_FLUSH_ALL).as_bytes(),
+        )
     }
 
     // TODO
     pub fn touch(&mut self, key: String, seconds: u32) -> Result<(), OperationError> {
-        Ok(())
+        todo!()
     }
 
     // TODO: returns?
@@ -266,7 +274,7 @@ impl Client {
         delta: u64,
     ) -> Result<u64, OperationError> {
         let line = conn
-            .write_read_line(&format!("{} {} {}\r\n", verb, key, delta).into_bytes())
+            .write_read_line(format!("{} {} {}\r\n", verb, key, delta).as_bytes())
             .map_err(|error| OperationError::IoError(error))?;
         if line.as_slice() == RESULT_NOT_FOUND {
             return Err(OperationError::CacheMissError);
@@ -293,10 +301,10 @@ impl Client {
     fn write_expectf(
         conn: &mut Conn,
         expect: &[u8],
-        write_buf: String,
+        write_buf: &[u8],
     ) -> Result<(), OperationError> {
         let line = conn
-            .write_read_line(write_buf.as_bytes()) // TODO: ?
+            .write_read_line(write_buf) // TODO: ?
             .map_err(|error| OperationError::IoError(error))?;
 
         match line.as_slice() {
