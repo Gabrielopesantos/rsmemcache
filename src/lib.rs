@@ -1,9 +1,12 @@
 #![allow(dead_code)]
 mod errors;
 mod item;
+mod selector;
+
 use crate::{
     errors::{ConnError, OperationError, WriteReadLineError},
     item::Item,
+    selector::ServerSelector,
 };
 use std::io::{self, BufRead, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -42,21 +45,27 @@ const VERB_FLUSH_ALL: &str = "flush_all";
 const VERB_VERSION: &str = "version";
 const VERB_QUIT: &str = "quit";
 
-#[allow(dead_code)]
 #[derive(Debug)]
-pub struct Client {
+pub struct Client<S: ServerSelector> {
     // Server address
-    server_addr: SocketAddr,
+    server_addr: SocketAddr, // NOTE: To be deleted;
     // Server connections
-    conns: Vec<Conn>,
+    conns: Vec<Conn>, // NOTE: To be deleted;
+    // Server Selector
+    selector: S,
     // Socket read/write timeout.
     timeout: u32,
     // Max idle connections
     max_idle_cons: u8,
 }
 
-impl Client {
-    pub fn new(server_addr: String, timeout: u32, max_idle_conns: u8) -> Result<Self, ConnError> {
+impl<S: ServerSelector> Client<S> {
+    pub fn new(
+        server_addr: String,
+        selector: S,
+        timeout: u32,
+        max_idle_conns: u8,
+    ) -> Result<Self, ConnError> {
         let socket_addr = SocketAddr::from_str(&server_addr)?;
         let tcp_stream = TcpStream::connect(socket_addr)?;
 
@@ -73,8 +82,9 @@ impl Client {
         Ok(Self {
             server_addr: socket_addr,
             conns: server_conns,
-            timeout: Client::net_timout(timeout),
-            max_idle_cons: Client::max_idle_conns(max_idle_conns),
+            selector,
+            timeout: Client::<S>::net_timout(timeout),
+            max_idle_cons: Client::<S>::max_idle_conns(max_idle_conns),
         })
     }
 
@@ -166,35 +176,35 @@ impl Client {
 
     // NOTE: Item reference?
     pub fn add(&mut self, item: Item) -> Result<(), OperationError> {
-        Client::populate_one(&mut self.conns[0], VERB_ADD, item)
+        Client::<S>::populate_one(&mut self.conns[0], VERB_ADD, item)
     }
 
     pub fn set(&mut self, item: Item) -> Result<(), OperationError> {
-        Client::populate_one(&mut self.conns[0], VERB_SET, item)
+        Client::<S>::populate_one(&mut self.conns[0], VERB_SET, item)
     }
 
     pub fn replace(&mut self, item: Item) -> Result<(), OperationError> {
-        Client::populate_one(&mut self.conns[0], VERB_REPLACE, item)
+        Client::<S>::populate_one(&mut self.conns[0], VERB_REPLACE, item)
     }
 
     pub fn append(&mut self, item: Item) -> Result<(), OperationError> {
-        Client::populate_one(&mut self.conns[0], VERB_APPEND, item)
+        Client::<S>::populate_one(&mut self.conns[0], VERB_APPEND, item)
     }
 
     pub fn prepend(&mut self, item: Item) -> Result<(), OperationError> {
-        Client::populate_one(&mut self.conns[0], VERB_PREPEND, item)
+        Client::<S>::populate_one(&mut self.conns[0], VERB_PREPEND, item)
     }
 
     pub fn increment(&mut self, key: String, delta: u64) -> Result<u64, OperationError> {
-        Client::incr_decr(&mut self.conns[0], VERB_INCR, key, delta)
+        Client::<S>::incr_decr(&mut self.conns[0], VERB_INCR, key, delta)
     }
 
     pub fn decrement(&mut self, key: String, delta: u64) -> Result<u64, OperationError> {
-        Client::incr_decr(&mut self.conns[0], VERB_DECR, key, delta)
+        Client::<S>::incr_decr(&mut self.conns[0], VERB_DECR, key, delta)
     }
 
     pub fn delete(&mut self, key: String) -> Result<(), OperationError> {
-        Client::write_expectf(
+        Client::<S>::write_expectf(
             &mut self.conns[0],
             RESULT_DELETED,
             format!("{} {}\r\n", VERB_DELETE, key).as_bytes(),
@@ -203,7 +213,7 @@ impl Client {
 
     // NOTE: Doesn't support optional `expiration` in seconds parameter;
     pub fn flush_all(&mut self) -> Result<(), OperationError> {
-        Client::write_expectf(
+        Client::<S>::write_expectf(
             &mut self.conns[0],
             RESULT_OK,
             format!("{}\r\n", VERB_FLUSH_ALL).as_bytes(),
@@ -211,7 +221,7 @@ impl Client {
     }
 
     pub fn delete_all(&mut self) -> Result<(), OperationError> {
-        Client::write_expectf(
+        Client::<S>::write_expectf(
             &mut self.conns[0],
             RESULT_OK,
             format!("{}\r\n", VERB_FLUSH_ALL).as_bytes(),
@@ -367,6 +377,7 @@ fn legal_key(key: &String) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::selector::ServerList;
     use crate::{errors::ConnError, item::Item};
 
     use super::Client;
@@ -374,7 +385,8 @@ mod tests {
 
     #[test]
     fn invalid_server_addr_returns_err() {
-        let result = Client::new(String::from("alksdjasld"), 0, 0);
+        // TODO: Fix `ServerList`
+        let result = Client::new(String::from("alksdjasld"), ServerList {}, 0, 0);
         match result {
             Ok(_) => panic!("expected creation of new client to fail"),
             Err(error) => match error {
@@ -386,7 +398,8 @@ mod tests {
 
     #[test]
     fn test_local_host() {
-        let mut client = match Client::new(String::from(LOCALHOST_TCP_ADDR), 0, 0) {
+        // TODO: Fix `ServerList`
+        let mut client = match Client::new(String::from(LOCALHOST_TCP_ADDR), ServerList {}, 0, 0) {
             Ok(client) => client,
             Err(error) => panic!("could not connect to local server: {:?}", error),
         };
