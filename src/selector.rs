@@ -18,7 +18,7 @@ pub trait ServerSelector {
 // NOTE: Let's not worry about possible concurrency for now
 #[derive(Debug)]
 pub struct ServerList {
-    addrs: Vec<SocketAddr>,
+    pub addrs: Vec<SocketAddr>, // NOTE pub
     key_buffer_pool: [u8; 256],
 }
 

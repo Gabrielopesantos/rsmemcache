@@ -116,23 +116,18 @@ impl<'a> Client<'a> {
     }
 
     pub fn ping(&mut self) -> Result<(), OperationError> {
-        // TODO: Empty key
-        match self.selector.pick_server("") {
-            Ok(socket_addr) => {
-                match self
-                    .get_conn(socket_addr)?
-                    .write_read_line(format!("{}\r\n", VERB_VERSION).as_bytes())
-                {
-                    Ok(_) => Ok(()),
-                    Err(error) => Err(OperationError::Io(error)),
-                }
-            }
-            Err(error) => {
-                return Err(OperationError::Client(format!(
-                    "could not pick server: {}",
-                    error
-                )))
-            }
+        for addr in self.selector.addrs.iter() {
+            let conn = self.get_conn(*addr)?;
+            Self::internal_ping(&conn);
+            // self.put_free_conn(*addr, conn);
+        }
+        Ok(())
+    }
+
+    fn internal_ping(conn: &Conn<'a>) -> Result<(), OperationError> {
+        match conn.write_read_line(format!("{}\r\n", VERB_VERSION).as_bytes()) {
+            Ok(_) => Ok(()),
+            Err(error) => Err(OperationError::Io(error)),
         }
     }
 }
