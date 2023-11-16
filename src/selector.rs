@@ -30,7 +30,7 @@ impl ServerList {
         }
     }
 
-    pub fn set_servers(&mut self, servers: Vec<String>) {
+    pub fn set_servers(&mut self, servers: Vec<String>) -> Result<(), OperationError> {
         // let mut addrs = Vec::with_capacity(servers.len());
         for (_, srv) in servers.iter().enumerate() {
             let socket_addr: Result<SocketAddr, _> = srv.parse();
@@ -39,9 +39,15 @@ impl ServerList {
                 // Ok(addr) => addrs[index] = addr,
                 Ok(addr) => self.addrs.push(addr),
                 // TODO: Return error instead
-                Err(error) => println!("could not parse addr {}: {}", srv, error),
+                Err(error) => {
+                    return Err(OperationError::Client(format!(
+                        "invalid server address provided: {}",
+                        error
+                    )))
+                }
             }
         }
+        Ok(())
     }
 }
 

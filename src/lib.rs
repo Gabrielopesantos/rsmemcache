@@ -64,10 +64,10 @@ pub struct Client<'a> {
 
 // impl<T: ServerSelector> Client<T> {
 impl<'a> Client<'a> {
-    pub fn new(servers: Vec<String>) -> Self {
+    pub fn new(servers: Vec<String>) -> Result<Self, OperationError> {
         let mut selector = ServerList::new();
-        selector.set_servers(servers);
-        Self::new_from_selector(selector)
+        selector.set_servers(servers)?;
+        Ok(Self::new_from_selector(selector))
     }
 
     // pub fn new_from_selector(selector: T) -> Self {
@@ -442,7 +442,10 @@ mod tests {
     #[test]
     fn test_local_host() {
         // TODO: Fix `ServerList`
-        let mut client = Client::new(vec![LOCALHOST_TCP_ADDR.to_string()]);
+        let mut client = match Client::new(vec![LOCALHOST_TCP_ADDR.to_string()]) {
+            Ok(client) => client,
+            Err(error) => panic!("error creating client: {}", error),
+        };
 
         if let Err(error) = client.ping() {
             panic!("expected ping to succeed: {}", error)
