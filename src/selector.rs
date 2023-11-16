@@ -31,11 +31,13 @@ impl ServerList {
     }
 
     pub fn set_servers(&mut self, servers: Vec<String>) {
-        let mut addrs = Vec::with_capacity(servers.len());
-        for (index, srv) in servers.iter().enumerate() {
+        // let mut addrs = Vec::with_capacity(servers.len());
+        for (_, srv) in servers.iter().enumerate() {
             let socket_addr: Result<SocketAddr, _> = srv.parse();
             match socket_addr {
-                Ok(addr) => addrs[index] = addr,
+                // NOTE: Do we need to record server indexes?
+                // Ok(addr) => addrs[index] = addr,
+                Ok(addr) => self.addrs.push(addr),
                 // TODO: Return error instead
                 Err(error) => println!("could not parse addr {}: {}", srv, error),
             }

@@ -94,7 +94,7 @@ impl<'a> Client<'a> {
     }
 
     // TODO: addr
-    fn get_free_conn(&mut self, addr: SocketAddr) -> Option<Conn> {
+    fn get_free_conn(&mut self, addr: SocketAddr) -> Option<Conn<'a>> {
         match self.free_conns.get_mut(&addr.to_string()) {
             Some(addr_conns) => addr_conns.pop(),
             None => None,
@@ -110,7 +110,7 @@ impl<'a> Client<'a> {
         // let socket_addr = SocketAddr::from_str(&server_addr)?;
         let tcp_stream = TcpStream::connect(addr).map_err(|_| OperationError::NoServers)?; // TODO: Err
 
-        let mut server_conns: Vec<Conn> = Vec::new();
+        // let mut server_conns: Vec<Conn> = Vec::new();
         Ok(Conn::new(tcp_stream, self).map_err(|_| OperationError::NoServers)?)
         // TODO: Err
     }
@@ -426,29 +426,26 @@ mod tests {
     use super::Client;
     const LOCALHOST_TCP_ADDR: &str = "127.0.0.1:11211";
 
-    #[test]
-    fn invalid_server_addr_returns_err() {
-        // TODO: Fix `ServerList`
-        let result = Client::new(String::from("alksdjasld"), ServerList {}, 0, 0);
-        match result {
-            Ok(_) => panic!("expected creation of new client to fail"),
-            Err(error) => match error {
-                ConnError::AddrParseError(_) => (), // Expected error,
-                _ => panic!("unexpected error. Got: {:?}", error),
-            },
-        };
-    }
+    // #[test]
+    // fn invalid_server_addr_returns_err() {
+    //     // TODO: Fix `ServerList`
+    //     let result = Client::new(String::from("alksdjasld"), ServerList {}, 0, 0);
+    //     match result {
+    //         Ok(_) => panic!("expected creation of new client to fail"),
+    //         Err(error) => match error {
+    //             ConnError::AddrParseError(_) => (), // Expected error,
+    //             _ => panic!("unexpected error. Got: {:?}", error),
+    //         },
+    //     };
+    // }
 
     #[test]
     fn test_local_host() {
         // TODO: Fix `ServerList`
-        let mut client = match Client::new(String::from(LOCALHOST_TCP_ADDR), ServerList {}, 0, 0) {
-            Ok(client) => client,
-            Err(error) => panic!("could not connect to local server: {:?}", error),
-        };
+        let mut client = Client::new(vec![LOCALHOST_TCP_ADDR.to_string()]);
 
-        if let Err(_) = client.ping() {
-            panic!("expected ping to succeed")
+        if let Err(error) = client.ping() {
+            panic!("expected ping to succeed: {}", error)
         }
 
         // NOTE: Setting `expiration` to 5 seconds so tests don't fail on subsequent runs;
